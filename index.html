@@ -71,6 +71,15 @@
           <button id="deafenBtn" aria-pressed="false">Ses açık</button>
           <button id="leaveBtn" class="danger">Ayrıl</button>
         </div>
+        <label class="gate">
+          <span>Giriş duyarlılığı: <span id="gateValue"></span></span>
+          <span class="level"><span id="micLevel"></span></span>
+          <input id="gateSlider" type="range" min="-70" max="-10" step="1">
+        </label>
+        <div class="keybind">
+          <span>Susturma tuşu</span>
+          <button id="muteKeyBtn" title="Tıkla, sonra bir tuşa bas. Esc: vazgeç, Sil: tuşu kaldır"></button>
+        </div>
       </div>
       <footer>
         <span id="meName"></span>

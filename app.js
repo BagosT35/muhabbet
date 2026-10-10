@@ -40,7 +40,8 @@ let oldestId = null;
 let lobby = null; // çevrimiçi listesi + ses sinyalleşmesi
 let dbChanges = null;
 
-const voice = { channelId: null, stream: null, muted: false, deafened: false };
+// mic: ham mikrofon; stream: gürültü kapısından geçmiş, karşıya giden ses
+const voice = { channelId: null, mic: null, stream: null, gate: null, muted: false, deafened: false };
 const peers = new Map(); // karşı sessionId -> { pc, audio, pending, created }
 const meters = new Map(); // sessionId -> { source, analyser, buf }
 let audioCtx = null;
@@ -50,6 +51,16 @@ let volumes = {};
 try {
   volumes = JSON.parse(localStorage.getItem('volumes')) ?? {};
 } catch {}
+
+// Giriş duyarlılığı eşiği (dB). En soldaki değer kapıyı kapatır, her ses geçer.
+const GATE_MIN = -70;
+const GATE_MAX = -10;
+let gateDb = -50;
+try {
+  const saved = Number(localStorage.getItem('gate') ?? gateDb);
+  if (saved >= GATE_MIN && saved <= GATE_MAX) gateDb = saved;
+} catch {}
+let gateModule = null;
 
 // ---------- Giriş ----------
 
@@ -436,29 +447,78 @@ async function joinVoice(id) {
   if (presences().filter((p) => p.voice === id).length >= MAX_VOICE) return toast(`Bu kanal dolu (en fazla ${MAX_VOICE} kişi).`);
   if (voice.channelId) leaveVoice();
 
-  let stream;
+  let mic;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
+    mic = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
   } catch {
     return toast('Mikrofona erişilemedi. Tarayıcıdan mikrofon izni ver.');
   }
+  const gate = await openGate(mic);
   if (voice.channelId) leaveVoice(); // izin beklenirken başka kanala tıklandıysa
   voice.channelId = id;
-  voice.stream = stream;
-  addMeter(sessionId, stream);
+  voice.mic = mic;
+  voice.gate = gate;
+  voice.stream = gate.stream;
+  applyGate();
+  addMeter(sessionId, voice.stream);
   await trackMe();
   renderChannels();
   reconcilePeers();
 }
 
+// Mikrofonu gürültü kapısından geçirir: eşiğin altındaki sesler (fare, klavye, fan) karşıya gitmez.
+// Kapı kurulamazsa ham mikrofon gönderilir.
+async function openGate(mic) {
+  try {
+    audioCtx ??= new AudioContext();
+    audioCtx.resume();
+    await (gateModule ??= audioCtx.audioWorklet.addModule('gate-worklet.js'));
+    const source = audioCtx.createMediaStreamSource(mic);
+    const node = new AudioWorkletNode(audioCtx, 'gate', { channelCount: 1, channelCountMode: 'explicit', outputChannelCount: [1] });
+    const dest = audioCtx.createMediaStreamDestination();
+    source.connect(node).connect(dest);
+    node.port.onmessage = (e) => showLevel(e.data);
+    return { stream: dest.stream, source, node };
+  } catch (err) {
+    console.error('gate', err);
+    return { stream: mic };
+  }
+}
+
+function applyGate() {
+  const off = gateDb <= GATE_MIN;
+  $('gateSlider').value = gateDb;
+  $('gateValue').textContent = off ? 'kapalı' : `${gateDb} dB`;
+  voice.gate?.node?.parameters.get('threshold').setValueAtTime(off ? 0 : 10 ** (gateDb / 20), audioCtx.currentTime);
+}
+
+function showLevel({ level, open }) {
+  const db = 20 * Math.log10(level || 1e-6);
+  const percent = ((db - GATE_MIN) / (GATE_MAX - GATE_MIN)) * 100;
+  $('micLevel').style.width = `${Math.min(100, Math.max(0, percent))}%`;
+  $('micLevel').classList.toggle('open', open);
+}
+
+$('gateSlider').addEventListener('input', () => {
+  gateDb = Number($('gateSlider').value);
+  applyGate();
+  try {
+    localStorage.setItem('gate', gateDb);
+  } catch {}
+});
+applyGate();
+
 function leaveVoice() {
   if (!voice.channelId) return;
   for (const sid of [...peers.keys()]) closePeer(sid);
+  voice.mic.getTracks().forEach((t) => t.stop());
   voice.stream.getTracks().forEach((t) => t.stop());
+  voice.gate.source?.disconnect();
+  voice.gate.node?.disconnect();
   removeMeter(sessionId);
-  voice.channelId = voice.stream = null;
+  voice.channelId = voice.mic = voice.stream = voice.gate = null;
   voice.muted = voice.deafened = false;
   trackMe();
   renderChannels();
@@ -470,12 +530,60 @@ function setMuted(muted) {
 }
 
 $('leaveBtn').addEventListener('click', leaveVoice);
-$('muteBtn').addEventListener('click', () => {
+function toggleMute() {
   if (voice.deafened) return; // ses kapalıyken mikrofon da kapalı kalır
   setMuted(!voice.muted);
   trackMe();
   renderChannels();
+}
+$('muteBtn').addEventListener('click', toggleMute);
+
+// Susturma tuşu. Yalnızca bu sekme odaktayken çalışır: tarayıcı, başka penceredeyken basılan tuşları sayfaya bildirmez.
+let muteKey = null; // { code, ctrl, alt, shift }
+try {
+  muteKey = JSON.parse(localStorage.getItem('muteKey'));
+} catch {}
+let capturingKey = false;
+
+function keyLabel({ code, ctrl, alt, shift }) {
+  const name = code.replace(/^(Key|Digit)/, '').replace(/^Numpad/, 'Num ');
+  return (ctrl ? 'Ctrl+' : '') + (alt ? 'Alt+' : '') + (shift ? 'Shift+' : '') + name;
+}
+
+function renderMuteKey() {
+  $('muteKeyBtn').textContent = capturingKey ? 'Bir tuşa bas…' : muteKey?.code ? keyLabel(muteKey) : 'Yok';
+  $('muteKeyBtn').setAttribute('aria-pressed', capturingKey);
+}
+
+$('muteKeyBtn').addEventListener('click', () => {
+  capturingKey = !capturingKey;
+  $('muteKeyBtn').blur(); // basılan tuş düğmeyi yeniden tetiklemesin
+  renderMuteKey();
 });
+
+document.addEventListener('keydown', (e) => {
+  if (capturingKey) {
+    if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return; // birleşimin asıl tuşunu bekle
+    e.preventDefault();
+    e.stopPropagation();
+    capturingKey = false;
+    if (e.code !== 'Escape') {
+      muteKey = ['Backspace', 'Delete'].includes(e.code) ? null : { code: e.code, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey };
+      try {
+        localStorage.setItem('muteKey', JSON.stringify(muteKey));
+      } catch {}
+    }
+    return renderMuteKey();
+  }
+  if (!muteKey?.code || !voice.channelId || e.repeat) return;
+  if (e.code !== muteKey.code || e.ctrlKey !== muteKey.ctrl || e.altKey !== muteKey.alt || e.shiftKey !== muteKey.shift) return;
+  // Mesaj yazarken düz harf tuşu susturmasın; Ctrl/Alt birleşimleri ve F tuşları her yerde çalışır.
+  const typing = e.target.matches?.('input:not([type="range"]), textarea');
+  if (typing && !muteKey.ctrl && !muteKey.alt && !/^F\d+$/.test(muteKey.code)) return;
+  e.preventDefault();
+  toggleMute();
+}, true);
+renderMuteKey();
 $('deafenBtn').addEventListener('click', () => {
   voice.deafened = !voice.deafened;
   setMuted(voice.deafened);
