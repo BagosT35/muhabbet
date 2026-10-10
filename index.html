@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1e1f22">
+  <title>Muhabbet</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <section id="setup" class="center" hidden>
+    <div class="card">
+      <h1>Kurulum gerekli</h1>
+      <p><code>config.js</code> dosyasına Supabase adresi ve anahtarı yazılmamış. Adımlar için <code>README.md</code> dosyasına bak.</p>
+    </div>
+  </section>
+
+  <section id="auth" class="center" hidden>
+    <form id="authForm" class="card">
+      <h1>Muhabbet</h1>
+      <label>E-posta
+        <input id="email" type="email" autocomplete="email" required>
+      </label>
+      <label>Şifre
+        <input id="password" type="password" autocomplete="current-password" minlength="6" required>
+      </label>
+      <p id="authMsg" class="msg" role="alert"></p>
+      <button type="submit" class="primary">Giriş yap</button>
+      <button type="button" id="signupBtn">Hesabım yok, kayıt ol</button>
+    </form>
+  </section>
+
+  <section id="join" class="center" hidden>
+    <form id="joinForm" class="card">
+      <h1>Sunucuya katıl</h1>
+      <label>Kullanıcı adı
+        <input id="username" minlength="2" maxlength="24" autocomplete="nickname" required>
+      </label>
+      <label>Davet kodu
+        <input id="invite" autocomplete="off" required>
+      </label>
+      <p id="joinMsg" class="msg" role="alert"></p>
+      <button type="submit" class="primary">Katıl</button>
+      <button type="button" class="logout">Çıkış yap</button>
+    </form>
+  </section>
+
+  <div id="app" hidden>
+    <aside id="sidebar">
+      <header>Muhabbet</header>
+      <nav>
+        <div class="group">
+          <span>Yazı kanalları</span>
+          <button class="add" data-kind="text" title="Yazı kanalı ekle" aria-label="Yazı kanalı ekle">+</button>
+        </div>
+        <ul id="textChannels"></ul>
+        <div class="group">
+          <span>Ses kanalları</span>
+          <button class="add" data-kind="voice" title="Ses kanalı ekle" aria-label="Ses kanalı ekle">+</button>
+        </div>
+        <ul id="voiceChannels"></ul>
+      </nav>
+      <div id="voicePanel" hidden>
+        <div class="voiceInfo">
+          <strong>Ses bağlı</strong>
+          <span id="voiceName"></span>
+        </div>
+        <div class="voiceBtns">
+          <button id="muteBtn" aria-pressed="false">Mikrofon açık</button>
+          <button id="deafenBtn" aria-pressed="false">Ses açık</button>
+          <button id="leaveBtn" class="danger">Ayrıl</button>
+        </div>
+      </div>
+      <footer>
+        <span id="meName"></span>
+        <button class="logout">Çıkış</button>
+      </footer>
+    </aside>
+
+    <main>
+      <header>
+        <button id="menuBtn" aria-label="Kanalları aç">☰</button>
+        <h2 id="channelTitle"></h2>
+      </header>
+      <div id="messages">
+        <button id="olderBtn" hidden>Daha eski mesajlar</button>
+        <ol id="messageList"></ol>
+      </div>
+      <form id="composer">
+        <textarea id="input" rows="1" maxlength="2000" placeholder="Mesaj yaz…" aria-label="Mesaj"></textarea>
+        <button type="submit" class="primary">Gönder</button>
+      </form>
+    </main>
+
+    <aside id="members">
+      <div class="group"><span>Çevrimiçi</span></div>
+      <ul id="memberList"></ul>
+    </aside>
+  </div>
+
+  <dialog id="channelDialog">
+    <form id="channelForm" method="dialog">
+      <h3 id="channelDialogTitle">Kanal ekle</h3>
+      <label>Kanal adı
+        <input id="channelName" maxlength="32" required>
+      </label>
+      <p id="channelMsg" class="msg" role="alert"></p>
+      <div class="row">
+        <button type="button" id="channelCancel">Vazgeç</button>
+        <button type="submit" class="primary">Ekle</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" role="status" hidden></div>
+  <div id="audios" hidden></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
