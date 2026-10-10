@@ -44,7 +44,8 @@ let dbChanges = null;
 // share: paylaşılan ekranın görüntü parçası (yayın yoksa null)
 const voice = { channelId: null, mic: null, stream: null, gate: null, share: null, muted: false, deafened: false };
 const peers = new Map(); // karşı sessionId -> { pc, audio, pending, created, video, screen }
-const tiles = new Map(); // yayın yapanın sessionId'si -> { node, track }
+const tiles = new Map(); // yayın yapanın sessionId'si -> { node, key }
+const watching = new Set(); // izlemek istediğim yayıncıların sessionId'leri; herkes görsün diye durumuma yazılır
 
 // Ekran yayını her izleyiciye ayrı ayrı gönderilir; toplam yükleme hızı bu sınırı aşmasın.
 const SHARE_PEER_BITRATE = 2_500_000;
@@ -259,7 +260,7 @@ function renderChannels() {
   $('muteBtn').setAttribute('aria-pressed', voice.muted);
   $('deafenBtn').textContent = voice.deafened ? 'Ses kapalı' : 'Ses açık';
   $('deafenBtn').setAttribute('aria-pressed', voice.deafened);
-  $('shareBtn').textContent = voice.share ? 'Yayını durdur' : 'Ekran paylaş';
+  $('shareBtn').textContent = voice.share ? `Yayını durdur (${viewers().size} izleyici)` : 'Ekran paylaş';
   $('shareBtn').setAttribute('aria-pressed', !!voice.share);
   renderStage();
 }
@@ -418,6 +419,7 @@ function trackMe() {
     muted: voice.muted,
     deafened: voice.deafened,
     sharing: !!voice.share,
+    watching: [...watching],
   });
 }
 
@@ -426,6 +428,7 @@ function onPresence() {
   renderChannels();
   reconcilePeers();
   applyVolumes();
+  syncShare();
 }
 
 function applyVolumes() {
@@ -527,6 +530,7 @@ function leaveVoice() {
   for (const sid of [...peers.keys()]) closePeer(sid);
   voice.share?.stop();
   voice.share = null;
+  watching.clear();
   voice.mic.getTracks().forEach((t) => t.stop());
   voice.stream.getTracks().forEach((t) => t.stop());
   voice.gate.source?.disconnect();
@@ -659,13 +663,22 @@ function stopShare() {
   renderChannels();
 }
 
-// Her bağlantının görüntü hattına yayını tak ya da çıkar. Hat baştan açık olduğu için yeniden anlaşma gerekmez.
+// Yayınımı izlemek isteyenlerin sessionId'leri.
+function viewers() {
+  return new Set(presences().filter((p) => p.voice === voice.channelId && p.watching?.includes(sessionId)).map((p) => p.sid));
+}
+
+// Yayını yalnızca "İzle" diyenlerin görüntü hattına tak, diğerlerinden çıkar; izlemeyene veri gitmez.
+// Hat baştan açık olduğu için yeniden anlaşma gerekmez.
 function syncShare() {
-  const senders = [...peers.values()].map((p) => p.video?.sender).filter(Boolean);
-  const maxBitrate = Math.min(SHARE_PEER_BITRATE, SHARE_TOTAL_BITRATE / senders.length);
-  for (const sender of senders) {
-    if (sender.track !== voice.share) sender.replaceTrack(voice.share).catch((err) => console.error('share', err));
-    if (!voice.share) continue;
+  const want = voice.share ? viewers() : new Set();
+  const maxBitrate = Math.min(SHARE_PEER_BITRATE, SHARE_TOTAL_BITRATE / want.size);
+  for (const [sid, peer] of peers) {
+    const sender = peer.video?.sender;
+    if (!sender) continue;
+    const track = want.has(sid) ? voice.share : null;
+    if (sender.track !== track) sender.replaceTrack(track).catch((err) => console.error('share', err));
+    if (!track) continue;
     const params = sender.getParameters();
     if (!params.encodings?.length) continue;
     params.encodings[0].maxBitrate = maxBitrate;
@@ -673,26 +686,52 @@ function syncShare() {
   }
 }
 
+function setWatching(sid, on) {
+  if (on) watching.add(sid);
+  else watching.delete(sid);
+  trackMe();
+  renderStage();
+}
+
 function renderStage() {
-  const live = new Map();
+  const live = new Map(); // yayın yapanın sessionId'si -> { name, track }; track yalnızca izliyorsak dolu
   if (voice.channelId) {
     for (const p of presences()) {
-      const track = peers.get(p.sid)?.screen;
-      if (p.sharing && p.voice === voice.channelId && track) live.set(p.sid, { track, name: p.username });
+      if (!p.sharing || p.voice !== voice.channelId || p.sid === sessionId) continue;
+      const track = (watching.has(p.sid) && peers.get(p.sid)?.screen) || null;
+      live.set(p.sid, { name: p.username, track, key: track ?? watching.has(p.sid) }); // key değişince kutu yeniden çizilir
     }
   }
+  // Biten yayının izleme isteği de biter; aynı kişi yeniden yayın açarsa tekrar "İzle" demek gerekir.
+  const ended = [...watching].filter((sid) => !live.has(sid));
+  for (const sid of ended) watching.delete(sid);
+  if (ended.length) trackMe();
+
   for (const [sid, tile] of tiles) {
-    if (live.get(sid)?.track === tile.track) continue;
+    if (live.has(sid) && live.get(sid).key === tile.key) continue;
     tile.node.remove();
     tiles.delete(sid);
   }
-  for (const [sid, { track, name }] of live) {
+  for (const [sid, { name, track, key }] of live) {
     if (tiles.has(sid)) continue;
-    const video = el('video', { autoplay: true, muted: true, playsInline: true, srcObject: new MediaStream([track]) });
-    const node = el('figure', { className: 'tile', title: 'Tam ekran için tıkla' }, video, el('figcaption', {}, name));
-    node.addEventListener('click', () => (document.fullscreenElement ? document.exitFullscreen() : video.requestFullscreen()));
-    video.play().catch(() => {});
-    tiles.set(sid, { node, track });
+    let node;
+    if (track) {
+      const video = el('video', { autoplay: true, muted: true, playsInline: true, srcObject: new MediaStream([track]) });
+      const close = el('button', { className: 'close', title: 'İzlemeyi bırak' }, '✕');
+      close.setAttribute('aria-label', `${name} yayınını izlemeyi bırak`);
+      close.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setWatching(sid, false);
+      });
+      node = el('figure', { className: 'tile', title: 'Tam ekran için tıkla' }, video, el('figcaption', {}, name), close);
+      node.addEventListener('click', () => (document.fullscreenElement ? document.exitFullscreen() : video.requestFullscreen()));
+      video.play().catch(() => {});
+    } else {
+      const watch = el('button', { className: 'primary' }, watching.has(sid) ? 'Bağlanıyor…' : 'İzle');
+      watch.addEventListener('click', () => setWatching(sid, true));
+      node = el('div', { className: 'offer' }, el('span', {}, `${name} yayında`), watch);
+    }
+    tiles.set(sid, { node, key });
     $('stage').append(node);
   }
   $('stage').hidden = !tiles.size;
