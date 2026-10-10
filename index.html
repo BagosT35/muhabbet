@@ -69,7 +69,8 @@
         <div class="voiceBtns">
           <button id="muteBtn" aria-pressed="false">Mikrofon açık</button>
           <button id="deafenBtn" aria-pressed="false">Ses açık</button>
-          <button id="leaveBtn" class="danger">Ayrıl</button>
+          <button id="shareBtn" class="wide" aria-pressed="false">Ekran paylaş</button>
+          <button id="leaveBtn" class="danger wide">Ayrıl</button>
         </div>
         <label class="gate">
           <span>Giriş duyarlılığı: <span id="gateValue"></span></span>
@@ -92,6 +93,7 @@
         <button id="menuBtn" aria-label="Kanalları aç">☰</button>
         <h2 id="channelTitle"></h2>
       </header>
+      <div id="stage" hidden></div>
       <div id="messages">
         <button id="olderBtn" hidden>Daha eski mesajlar</button>
         <ol id="messageList"></ol>

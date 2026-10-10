@@ -41,8 +41,14 @@ let lobby = null; // çevrimiçi listesi + ses sinyalleşmesi
 let dbChanges = null;
 
 // mic: ham mikrofon; stream: gürültü kapısından geçmiş, karşıya giden ses
-const voice = { channelId: null, mic: null, stream: null, gate: null, muted: false, deafened: false };
-const peers = new Map(); // karşı sessionId -> { pc, audio, pending, created }
+// share: paylaşılan ekranın görüntü parçası (yayın yoksa null)
+const voice = { channelId: null, mic: null, stream: null, gate: null, share: null, muted: false, deafened: false };
+const peers = new Map(); // karşı sessionId -> { pc, audio, pending, created, video, screen }
+const tiles = new Map(); // yayın yapanın sessionId'si -> { node, track }
+
+// Ekran yayını her izleyiciye ayrı ayrı gönderilir; toplam yükleme hızı bu sınırı aşmasın.
+const SHARE_PEER_BITRATE = 2_500_000;
+const SHARE_TOTAL_BITRATE = 6_000_000;
 const meters = new Map(); // sessionId -> { source, analyser, buf }
 let audioCtx = null;
 
@@ -231,6 +237,7 @@ function renderChannels() {
     const occupants = present.filter((p) => p.voice === c.id).map((p) => {
       const row = el('li', { className: 'person' }, avatar(p.user_id, p.username), el('span', { className: 'name' }, p.username));
       row.dataset.sid = p.sid;
+      if (p.sharing) row.append(el('span', { className: 'tag live' }, 'yayında'));
       if (p.deafened) row.append(el('span', { className: 'tag' }, 'sağır'));
       else if (p.muted) row.append(el('span', { className: 'tag' }, 'sessiz'));
       if (c.id === voice.channelId && p.user_id !== me.id) row.append(volumeSlider(p));
@@ -252,6 +259,9 @@ function renderChannels() {
   $('muteBtn').setAttribute('aria-pressed', voice.muted);
   $('deafenBtn').textContent = voice.deafened ? 'Ses kapalı' : 'Ses açık';
   $('deafenBtn').setAttribute('aria-pressed', voice.deafened);
+  $('shareBtn').textContent = voice.share ? 'Yayını durdur' : 'Ekran paylaş';
+  $('shareBtn').setAttribute('aria-pressed', !!voice.share);
+  renderStage();
 }
 
 for (const btn of document.querySelectorAll('.add')) {
@@ -407,6 +417,7 @@ function trackMe() {
     voice: voice.channelId,
     muted: voice.muted,
     deafened: voice.deafened,
+    sharing: !!voice.share,
   });
 }
 
@@ -463,6 +474,7 @@ async function joinVoice(id) {
   voice.stream = gate.stream;
   applyGate();
   addMeter(sessionId, voice.stream);
+  syncDesktopKey();
   await trackMe();
   renderChannels();
   reconcilePeers();
@@ -513,6 +525,8 @@ applyGate();
 function leaveVoice() {
   if (!voice.channelId) return;
   for (const sid of [...peers.keys()]) closePeer(sid);
+  voice.share?.stop();
+  voice.share = null;
   voice.mic.getTracks().forEach((t) => t.stop());
   voice.stream.getTracks().forEach((t) => t.stop());
   voice.gate.source?.disconnect();
@@ -520,6 +534,7 @@ function leaveVoice() {
   removeMeter(sessionId);
   voice.channelId = voice.mic = voice.stream = voice.gate = null;
   voice.muted = voice.deafened = false;
+  syncDesktopKey();
   trackMe();
   renderChannels();
 }
@@ -555,10 +570,26 @@ function renderMuteKey() {
   $('muteKeyBtn').setAttribute('aria-pressed', capturingKey);
 }
 
+// Masaüstü uygulamasında (desktop/) tuş Windows'a genel kısayol olarak kaydedilir ve başka uygulama öndeyken de çalışır.
+// Kayıtlı tuşu Windows yuttuğu için yalnızca ses kanalındayken kayıtlı tutulur.
+const desktop = window.muhabbetDesktop;
+let globalKey = false; // tuş şu an genel kısayol olarak kayıtlı mı
+desktop?.onToggleMute(() => voice.channelId && toggleMute());
+
+async function syncDesktopKey() {
+  if (!desktop) return;
+  const key = voice.channelId && !capturingKey && muteKey?.code ? muteKey : null;
+  globalKey = false;
+  const ok = await desktop.setMuteKey(key);
+  globalKey = !!key && ok;
+  if (key && !ok) toast('Bu tuş genel kısayol olarak atanamadı; yalnızca Muhabbet penceresi öndeyken çalışır.');
+}
+
 $('muteKeyBtn').addEventListener('click', () => {
   capturingKey = !capturingKey;
   $('muteKeyBtn').blur(); // basılan tuş düğmeyi yeniden tetiklemesin
   renderMuteKey();
+  syncDesktopKey(); // atama sırasında eski tuş yutulmasın
 });
 
 document.addEventListener('keydown', (e) => {
@@ -573,9 +604,10 @@ document.addEventListener('keydown', (e) => {
         localStorage.setItem('muteKey', JSON.stringify(muteKey));
       } catch {}
     }
+    syncDesktopKey();
     return renderMuteKey();
   }
-  if (!muteKey?.code || !voice.channelId || e.repeat) return;
+  if (!muteKey?.code || !voice.channelId || e.repeat || globalKey) return;
   if (e.code !== muteKey.code || e.ctrlKey !== muteKey.ctrl || e.altKey !== muteKey.alt || e.shiftKey !== muteKey.shift) return;
   // Mesaj yazarken düz harf tuşu susturmasın; Ctrl/Alt birleşimleri ve F tuşları her yerde çalışır.
   const typing = e.target.matches?.('input:not([type="range"]), textarea');
@@ -592,6 +624,80 @@ $('deafenBtn').addEventListener('click', () => {
   renderChannels();
 });
 
+// ---------- Ekran yayını ----------
+// Görüntü de ses gibi doğrudan izleyicilere gider; Supabase'den yalnızca "yayında" bilgisi geçer.
+
+$('shareBtn').hidden = !navigator.mediaDevices?.getDisplayMedia; // telefon tarayıcılarında yok
+$('shareBtn').addEventListener('click', async () => {
+  if (voice.share) return stopShare();
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: 30, width: { max: 1920 }, height: { max: 1080 } },
+      audio: false,
+    });
+  } catch {
+    return; // pencere seçmeden vazgeçildi
+  }
+  const [track] = stream.getVideoTracks();
+  if (!voice.channelId || voice.share) return track.stop();
+  track.contentHint = 'motion'; // oyun görüntüsünde akıcılık öncelikli
+  track.onended = stopShare; // tarayıcının kendi "Paylaşımı durdur" düğmesi
+  voice.share = track;
+  syncShare();
+  trackMe();
+  renderChannels();
+});
+
+function stopShare() {
+  if (!voice.share) return;
+  voice.share.onended = null;
+  voice.share.stop();
+  voice.share = null;
+  syncShare();
+  trackMe();
+  renderChannels();
+}
+
+// Her bağlantının görüntü hattına yayını tak ya da çıkar. Hat baştan açık olduğu için yeniden anlaşma gerekmez.
+function syncShare() {
+  const senders = [...peers.values()].map((p) => p.video?.sender).filter(Boolean);
+  const maxBitrate = Math.min(SHARE_PEER_BITRATE, SHARE_TOTAL_BITRATE / senders.length);
+  for (const sender of senders) {
+    if (sender.track !== voice.share) sender.replaceTrack(voice.share).catch((err) => console.error('share', err));
+    if (!voice.share) continue;
+    const params = sender.getParameters();
+    if (!params.encodings?.length) continue;
+    params.encodings[0].maxBitrate = maxBitrate;
+    sender.setParameters(params).catch(() => {});
+  }
+}
+
+function renderStage() {
+  const live = new Map();
+  if (voice.channelId) {
+    for (const p of presences()) {
+      const track = peers.get(p.sid)?.screen;
+      if (p.sharing && p.voice === voice.channelId && track) live.set(p.sid, { track, name: p.username });
+    }
+  }
+  for (const [sid, tile] of tiles) {
+    if (live.get(sid)?.track === tile.track) continue;
+    tile.node.remove();
+    tiles.delete(sid);
+  }
+  for (const [sid, { track, name }] of live) {
+    if (tiles.has(sid)) continue;
+    const video = el('video', { autoplay: true, muted: true, playsInline: true, srcObject: new MediaStream([track]) });
+    const node = el('figure', { className: 'tile', title: 'Tam ekran için tıkla' }, video, el('figcaption', {}, name));
+    node.addEventListener('click', () => (document.fullscreenElement ? document.exitFullscreen() : video.requestFullscreen()));
+    video.play().catch(() => {});
+    tiles.set(sid, { node, track });
+    $('stage').append(node);
+  }
+  $('stage').hidden = !tiles.size;
+}
+
 function signal(to, data) {
   lobby.send({ type: 'broadcast', event: 'signal', payload: { from: sessionId, to, data } });
 }
@@ -604,11 +710,19 @@ function createPeer(sid) {
   peers.set(sid, peer);
 
   for (const track of voice.stream.getTracks()) pc.addTrack(track, voice.stream);
+  // Ekran yayını için boş bir görüntü hattı; teklifi yapan açar, karşı taraf onSignal'de kendi yönünü açar.
+  // Sesle aynı akışa bağlı: eski sürümdeki istemciler akışı olmayan bir parça gelince sesi kaybediyor.
+  if (sessionId < sid) peer.video = pc.addTransceiver('video', { direction: 'sendrecv', streams: [voice.stream] });
   pc.onicecandidate = (e) => e.candidate && signal(sid, { candidate: e.candidate });
   pc.ontrack = (e) => {
-    audio.srcObject = e.streams[0];
+    if (e.track.kind === 'video') {
+      peer.screen = e.track;
+      return renderStage();
+    }
+    const stream = new MediaStream([e.track]);
+    audio.srcObject = stream;
     audio.play().catch(() => {});
-    addMeter(sid, e.streams[0]);
+    addMeter(sid, stream);
     applyVolumes();
   };
   pc.onconnectionstatechange = () => {
@@ -663,9 +777,12 @@ async function onSignal({ from, to, data }) {
       await pc.setRemoteDescription(data.sdp);
       for (const c of peer.pending.splice(0)) await pc.addIceCandidate(c);
       if (data.sdp.type === 'offer') {
+        peer.video ??= pc.getTransceivers().find((t) => t.receiver.track.kind === 'video');
+        if (peer.video) peer.video.direction = 'sendrecv';
         await pc.setLocalDescription(await pc.createAnswer());
         signal(from, { sdp: pc.localDescription });
       }
+      syncShare();
     } else if (data.candidate) {
       if (pc.remoteDescription) await pc.addIceCandidate(data.candidate);
       else peer.pending.push(data.candidate);

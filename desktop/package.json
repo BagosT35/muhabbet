@@ -1,0 +1,36 @@
+{
+  "name": "muhabbet-desktop",
+  "productName": "Muhabbet",
+  "version": "1.0.0",
+  "description": "Muhabbet masaüstü uygulaması",
+  "author": "BagosT35",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis"
+  },
+  "build": {
+    "appId": "io.github.bagost35.muhabbet",
+    "productName": "Muhabbet",
+    "artifactName": "Muhabbet-Kurulum-${version}.${ext}",
+    "files": [
+      "main.js",
+      "preload.js",
+      "picker.html",
+      "picker-preload.js"
+    ],
+    "win": {
+      "target": "nsis",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false
+    }
+  },
+  "devDependencies": {
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3"
+  }
+}
