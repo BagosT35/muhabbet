@@ -935,8 +935,12 @@ setInterval(() => {
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   show('setup');
 } else {
-  sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  // worker: bağlantıyı canlı tutan sinyal ayrı iş parçacığında atılır; sekme arkadayken tarayıcı zamanlayıcıları yavaşlatsa da kopmaz.
+  sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { realtime: { worker: true } });
   const { data } = await sb.auth.getSession();
+  // Supabase, sekme gizliyken oturum anahtarını yenilemeyi durdurur; anahtar 1 saatte dolunca
+  // lobi bağlantısı kesilir ve arkadaki (oyundaki) kişi ses kanalından düşer. Yenileme hep açık kalsın.
+  sb.auth.startAutoRefresh();
   await route(data.session);
   // Bu geri çağrının içinde doğrudan Supabase isteği yapmak kilitlenmeye yol açar; bir sonraki tura ertele.
   sb.auth.onAuthStateChange((event, session) => setTimeout(() => route(session), 0));
