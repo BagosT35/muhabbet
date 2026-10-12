@@ -1,14 +1,19 @@
 // Muhabbet masaüstü uygulaması: siteyi kendi penceresinde açar ve tarayıcının veremediği
-// iki şeyi ekler: başka uygulama öndeyken çalışan susturma tuşu ve ekran paylaşımı seçicisi.
+// üç şeyi ekler: başka uygulama öndeyken çalışan susturma tuşu, ekran paylaşımı seçicisi ve
+// pencere kapatılınca sistem tepsisinde (saatin yanında) çalışmaya devam etme.
 // Sitenin kendisi buraya gömülü değil; site güncellenince uygulama da güncellenmiş olur.
 
-const { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, session, shell } = require('electron');
+const { app, BrowserWindow, Menu, Tray, desktopCapturer, globalShortcut, ipcMain, nativeImage, session, shell } = require('electron');
 const path = require('node:path');
 
 const SITE = 'https://bagost35.github.io/muhabbet/';
 const fromSite = (url) => url.startsWith(SITE);
+const ICON = path.join(__dirname, 'icon.png');
 
 let win = null;
+let tray = null;
+let quitting = false; // tepsiden "Çıkış" denince true; yoksa X pencereyi yalnızca gizler
+let hinted = false; // tepsiye indiği bu açılışta bir kez haber verildi mi
 
 // Sitedeki tuş kaydını ({ code, ctrl, alt, shift }) Electron kısayoluna çevirir; desteklenmeyen tuşta null.
 const KEYS = {
@@ -90,10 +95,24 @@ function createWindow() {
     autoHideMenuBar: true,
     backgroundColor: '#313338',
     title: 'Muhabbet',
+    icon: ICON,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       backgroundThrottling: false, // pencere arkadayken ses ve bağlantı yavaşlamasın
     },
+  });
+  // X uygulamayı kapatmaz, tepsiye indirir: ses kanalı ve bildirimler arka planda sürer.
+  win.on('close', (e) => {
+    if (quitting) return;
+    e.preventDefault();
+    win.hide();
+    if (hinted) return;
+    hinted = true;
+    tray?.displayBalloon({
+      icon: nativeImage.createFromPath(ICON),
+      title: 'Muhabbet arka planda çalışıyor',
+      content: 'Açmak için saatin yanındaki simgeye tıkla; tamamen kapatmak için sağ tıklayıp "Çıkış" de.',
+    });
   });
   win.on('closed', () => (win = null));
   win.on('page-title-updated', (e) => e.preventDefault());
@@ -112,14 +131,28 @@ function createWindow() {
   win.loadURL(SITE);
 }
 
+function showWindow() {
+  if (!win) return createWindow();
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+
+function createTray() {
+  tray = new Tray(nativeImage.createFromPath(ICON).resize({ width: 32, height: 32 }));
+  tray.setToolTip('Muhabbet');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: "Muhabbet'i aç", click: showWindow },
+    { type: 'separator' },
+    { label: 'Çıkış', click: () => app.quit() },
+  ]));
+  tray.on('click', showWindow);
+}
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    if (!win) return;
-    if (win.isMinimized()) win.restore();
-    win.focus();
-  });
+  app.on('second-instance', showWindow);
 
   app.whenReady().then(() => {
     // Mikrofon gibi izinleri yalnızca siteye ver.
@@ -143,8 +176,11 @@ if (!app.requestSingleInstanceLock()) {
       }
     });
 
+    createTray();
     createWindow();
   });
+
+  app.on('before-quit', () => (quitting = true));
 
   app.on('will-quit', () => globalShortcut.unregisterAll());
   app.on('window-all-closed', () => app.quit());

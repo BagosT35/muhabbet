@@ -10,6 +10,16 @@ function el(tag, props = {}, ...children) {
   return node;
 }
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function icon(name) {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('class', 'ico');
+  const use = document.createElementNS(SVG_NS, 'use');
+  use.setAttribute('href', '#i-' + name);
+  svg.append(use);
+  return svg;
+}
+
 function show(view) {
   for (const v of ['setup', 'auth', 'join', 'app']) $(v).hidden = v !== view;
 }
@@ -52,6 +62,7 @@ const SHARE_PEER_BITRATE = 2_500_000;
 const SHARE_TOTAL_BITRATE = 6_000_000;
 const meters = new Map(); // sessionId -> { source, analyser, buf }
 let audioCtx = null;
+let mates = null; // ses kanalımdaki diğer oturumlar; kanalda değilken null
 
 // Kişi başına ses düzeyi (0–1). Yalnızca bu tarayıcıda saklanır; herkes kendi duyduğunu ayarlar.
 let volumes = {};
@@ -159,6 +170,7 @@ async function startApp() {
   if (started) return;
   started = true;
   $('meName').textContent = me.username;
+  $('meAvatar').replaceChildren(avatar(me.id, me.username));
   show('app');
 
   const { data } = await sb.from('profiles').select('id, username');
@@ -224,7 +236,7 @@ function renderChannels() {
   const present = presences();
 
   $('textChannels').replaceChildren(...channels.filter((c) => c.kind === 'text').map((c) => {
-    const btn = el('button', { className: 'channel' }, '# ' + c.name);
+    const btn = el('button', { className: 'channel' }, icon('hash'), el('span', {}, c.name));
     btn.classList.toggle('active', c.id === activeId);
     btn.classList.toggle('unread', unread.has(c.id));
     btn.addEventListener('click', () => selectChannel(c.id));
@@ -232,15 +244,15 @@ function renderChannels() {
   }));
 
   $('voiceChannels').replaceChildren(...channels.filter((c) => c.kind === 'voice').map((c) => {
-    const btn = el('button', { className: 'channel' }, '🔊 ' + c.name);
+    const btn = el('button', { className: 'channel' }, icon('voice'), el('span', {}, c.name));
     btn.classList.toggle('active', c.id === voice.channelId);
     btn.addEventListener('click', () => joinVoice(c.id));
     const occupants = present.filter((p) => p.voice === c.id).map((p) => {
       const row = el('li', { className: 'person' }, avatar(p.user_id, p.username), el('span', { className: 'name' }, p.username));
       row.dataset.sid = p.sid;
       if (p.sharing) row.append(el('span', { className: 'tag live' }, 'yayında'));
-      if (p.deafened) row.append(el('span', { className: 'tag' }, 'sağır'));
-      else if (p.muted) row.append(el('span', { className: 'tag' }, 'sessiz'));
+      if (p.deafened) row.append(el('span', { className: 'tag off', title: 'Sesi kapalı' }, icon('headphones')));
+      else if (p.muted) row.append(el('span', { className: 'tag off', title: 'Mikrofonu kapalı' }, icon('mic')));
       if (c.id === voice.channelId && p.user_id !== me.id) row.append(volumeSlider(p));
       return row;
     });
@@ -249,6 +261,7 @@ function renderChannels() {
 
   const online = new Map();
   for (const p of present) online.set(p.user_id, p.username);
+  $('memberCount').textContent = online.size;
   $('memberList').replaceChildren(...[...online].sort((a, b) => a[1].localeCompare(b[1], 'tr')).map(
     ([id, name]) => el('li', { className: 'person' }, avatar(id, name), el('span', { className: 'name' }, name)),
   ));
@@ -256,11 +269,13 @@ function renderChannels() {
   const current = channels.find((c) => c.id === voice.channelId);
   $('voicePanel').hidden = !current;
   if (current) $('voiceName').textContent = current.name;
-  $('muteBtn').textContent = voice.muted ? 'Mikrofon kapalı' : 'Mikrofon açık';
+  $('muteBtn').title = voice.muted ? 'Mikrofonu aç' : 'Mikrofonu kapat';
+  $('muteBtn').setAttribute('aria-label', $('muteBtn').title);
   $('muteBtn').setAttribute('aria-pressed', voice.muted);
-  $('deafenBtn').textContent = voice.deafened ? 'Ses kapalı' : 'Ses açık';
+  $('deafenBtn').title = voice.deafened ? 'Sesi aç' : 'Sesi kapat';
+  $('deafenBtn').setAttribute('aria-label', $('deafenBtn').title);
   $('deafenBtn').setAttribute('aria-pressed', voice.deafened);
-  $('shareBtn').textContent = voice.share ? `Yayını durdur (${viewers().size} izleyici)` : 'Ekran paylaş';
+  $('shareLabel').textContent = voice.share ? `Yayını durdur (${viewers().size} izleyici)` : 'Ekran paylaş';
   $('shareBtn').setAttribute('aria-pressed', !!voice.share);
   renderStage();
 }
@@ -302,11 +317,26 @@ function formatTime(iso) {
 }
 
 function messageNode(m) {
-  return el('li', { className: 'message' },
-    el('div', { className: 'head' },
-      el('span', { className: 'author' }, profiles.get(m.user_id) ?? 'bilinmeyen'),
-      el('time', { dateTime: m.created_at }, formatTime(m.created_at))),
-    el('div', { className: 'body' }, m.content));
+  const name = profiles.get(m.user_id) ?? 'bilinmeyen';
+  const node = el('li', { className: 'message' },
+    avatar(m.user_id, name),
+    el('div', { className: 'content' },
+      el('div', { className: 'head' },
+        el('span', { className: 'author' }, name),
+        el('time', { dateTime: m.created_at }, formatTime(m.created_at))),
+      el('div', { className: 'body' }, m.content)));
+  node.dataset.user = m.user_id;
+  node.dataset.at = Date.parse(m.created_at);
+  return node;
+}
+
+// Aynı kişinin 5 dakika içinde art arda yazdıkları tek başlık altında toplanır.
+function groupMessages() {
+  let prev = null;
+  for (const node of $('messageList').children) {
+    node.classList.toggle('cont', !!prev && prev.dataset.user === node.dataset.user && node.dataset.at - prev.dataset.at < 5 * 60_000);
+    prev = node.dataset.user ? node : null;
+  }
 }
 
 async function fetchMessages(channelId, beforeId) {
@@ -326,7 +356,7 @@ async function selectChannel(id) {
   seen.clear();
   oldestId = null;
   $('app').classList.remove('menu-open');
-  $('channelTitle').textContent = '# ' + (channels.find((c) => c.id === id)?.name ?? '');
+  $('channelTitle').textContent = channels.find((c) => c.id === id)?.name ?? '';
   $('messageList').replaceChildren();
   $('olderBtn').hidden = true;
   renderChannels();
@@ -337,6 +367,7 @@ async function selectChannel(id) {
   const fresh = rows.filter((m) => !seen.has(m.id));
   for (const m of fresh) seen.add(m.id);
   $('messageList').prepend(...fresh.map(messageNode));
+  groupMessages();
   if (!seen.size) $('messageList').append(el('li', { className: 'empty' }, 'Henüz mesaj yok. İlk mesajı sen yaz.'));
   oldestId = rows[0]?.id ?? null;
   $('olderBtn').hidden = rows.length < PAGE;
@@ -353,6 +384,7 @@ $('olderBtn').addEventListener('click', async () => {
   const fresh = rows.filter((m) => !seen.has(m.id));
   for (const m of fresh) seen.add(m.id);
   $('messageList').prepend(...fresh.map(messageNode));
+  groupMessages();
   if (rows.length) oldestId = rows[0].id;
   $('olderBtn').hidden = rows.length < PAGE;
   box.scrollTop += box.scrollHeight - before;
@@ -375,6 +407,7 @@ async function onMessage(m) {
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
   $('messageList').querySelector('.empty')?.remove();
   $('messageList').append(messageNode(m));
+  groupMessages();
   if (atBottom || m.user_id === me.id) box.scrollTop = box.scrollHeight;
 }
 
@@ -425,10 +458,44 @@ function trackMe() {
 
 function onPresence() {
   for (const p of presences()) profiles.set(p.user_id, p.username);
+  announceVoice();
   renderChannels();
   reconcilePeers();
   applyVolumes();
   syncShare();
+}
+
+function voiceMates() {
+  return new Set(presences().filter((p) => p.voice === voice.channelId && p.sid !== sessionId).map((p) => p.sid));
+}
+
+// Kanalıma biri girince ya da kanaldan çıkınca ses çal.
+function announceVoice() {
+  if (!voice.channelId) return;
+  const here = voiceMates();
+  if (mates) {
+    if ([...here].some((sid) => !mates.has(sid))) chime(true);
+    else if ([...mates].some((sid) => !here.has(sid))) chime(false);
+  }
+  mates = here;
+}
+
+// Giriş: yükselen iki nota, çıkış: alçalan iki nota. Ses dosyası yok, tarayıcıda üretilir.
+function chime(joined) {
+  if (!audioCtx || voice.deafened) return;
+  audioCtx.resume();
+  (joined ? [523.25, 783.99] : [783.99, 523.25]).forEach((freq, i) => {
+    const at = audioCtx.currentTime + i * 0.12;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0, at);
+    gain.gain.linearRampToValueAtTime(0.15, at + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, at + 0.28);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(at);
+    osc.stop(at + 0.3);
+  });
 }
 
 function applyVolumes() {
@@ -477,6 +544,8 @@ async function joinVoice(id) {
   voice.stream = gate.stream;
   applyGate();
   addMeter(sessionId, voice.stream);
+  mates = voiceMates();
+  chime(true);
   syncDesktopKey();
   await trackMe();
   renderChannels();
@@ -527,6 +596,8 @@ applyGate();
 
 function leaveVoice() {
   if (!voice.channelId) return;
+  chime(false);
+  mates = null;
   for (const sid of [...peers.keys()]) closePeer(sid);
   voice.share?.stop();
   voice.share = null;
@@ -795,7 +866,7 @@ async function sendOffer(sid, options) {
 // küçük olan teklifi yapar; böylece aynı anda iki teklif çakışmaz.
 function reconcilePeers() {
   if (!voice.channelId) return;
-  const here = new Set(presences().filter((p) => p.voice === voice.channelId && p.sid !== sessionId).map((p) => p.sid));
+  const here = voiceMates();
   for (const sid of here) {
     if (peers.has(sid)) continue;
     createPeer(sid);

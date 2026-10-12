@@ -5,9 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#1e1f22">
   <title>Muhabbet</title>
+  <link rel="icon" href="icon.png">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+
+  <svg hidden>
+    <symbol id="i-hash" viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/></symbol>
+    <symbol id="i-voice" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/></symbol>
+    <symbol id="i-headphones" viewBox="0 0 24 24"><path d="M3 18v-6a9 9 0 0 1 18 0v6M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></symbol>
+    <symbol id="i-screen" viewBox="0 0 24 24"><path d="M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM8 21h8M12 17v4"/></symbol>
+    <symbol id="i-leave" viewBox="0 0 24 24"><path d="M3 16.5c0-1.2.4-2.3 1.3-3a12 12 0 0 1 15.4 0c.9.7 1.3 1.8 1.3 3V18a1 1 0 0 1-1 1h-3a1 1 0 0 1-1-1v-1.8a9 9 0 0 0-8 0V18a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1zM9.5 3l5 5M14.5 3l-5 5"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></symbol>
+  </svg>
 
   <section id="setup" class="center" hidden>
     <div class="card">
@@ -18,7 +32,9 @@
 
   <section id="auth" class="center" hidden>
     <form id="authForm" class="card">
+      <img class="logo" src="icon.png" alt="">
       <h1>Muhabbet</h1>
+      <p class="sub">Tekrar hoş geldin!</p>
       <label>E-posta
         <input id="email" type="email" autocomplete="email" required>
       </label>
@@ -27,12 +43,13 @@
       </label>
       <p id="authMsg" class="msg" role="alert"></p>
       <button type="submit" class="primary">Giriş yap</button>
-      <button type="button" id="signupBtn">Hesabım yok, kayıt ol</button>
+      <button type="button" id="signupBtn" class="link">Hesabım yok, kayıt ol</button>
     </form>
   </section>
 
   <section id="join" class="center" hidden>
     <form id="joinForm" class="card">
+      <img class="logo" src="icon.png" alt="">
       <h1>Sunucuya katıl</h1>
       <label>Kullanıcı adı
         <input id="username" minlength="2" maxlength="24" autocomplete="nickname" required>
@@ -42,35 +59,37 @@
       </label>
       <p id="joinMsg" class="msg" role="alert"></p>
       <button type="submit" class="primary">Katıl</button>
-      <button type="button" class="logout">Çıkış yap</button>
+      <button type="button" class="logout link">Çıkış yap</button>
     </form>
   </section>
 
   <div id="app" hidden>
     <aside id="sidebar">
-      <header>Muhabbet</header>
+      <header><img src="icon.png" alt="">Muhabbet</header>
       <nav>
         <div class="group">
           <span>Yazı kanalları</span>
-          <button class="add" data-kind="text" title="Yazı kanalı ekle" aria-label="Yazı kanalı ekle">+</button>
+          <button class="add" data-kind="text" title="Yazı kanalı ekle" aria-label="Yazı kanalı ekle"><svg class="ico"><use href="#i-plus"/></svg></button>
         </div>
         <ul id="textChannels"></ul>
         <div class="group">
           <span>Ses kanalları</span>
-          <button class="add" data-kind="voice" title="Ses kanalı ekle" aria-label="Ses kanalı ekle">+</button>
+          <button class="add" data-kind="voice" title="Ses kanalı ekle" aria-label="Ses kanalı ekle"><svg class="ico"><use href="#i-plus"/></svg></button>
         </div>
         <ul id="voiceChannels"></ul>
       </nav>
       <div id="voicePanel" hidden>
         <div class="voiceInfo">
-          <strong>Ses bağlı</strong>
-          <span id="voiceName"></span>
+          <div>
+            <strong>Ses bağlı</strong>
+            <span id="voiceName"></span>
+          </div>
+          <button id="leaveBtn" class="iconbtn danger" title="Kanaldan ayrıl" aria-label="Kanaldan ayrıl"><svg class="ico"><use href="#i-leave"/></svg></button>
         </div>
         <div class="voiceBtns">
-          <button id="muteBtn" aria-pressed="false">Mikrofon açık</button>
-          <button id="deafenBtn" aria-pressed="false">Ses açık</button>
-          <button id="shareBtn" class="wide" aria-pressed="false">Ekran paylaş</button>
-          <button id="leaveBtn" class="danger wide">Ayrıl</button>
+          <button id="muteBtn" class="iconbtn toggle" aria-pressed="false"><svg class="ico"><use href="#i-mic"/></svg></button>
+          <button id="deafenBtn" class="iconbtn toggle" aria-pressed="false"><svg class="ico"><use href="#i-headphones"/></svg></button>
+          <button id="shareBtn" aria-pressed="false"><svg class="ico"><use href="#i-screen"/></svg><span id="shareLabel">Ekran paylaş</span></button>
         </div>
         <label class="gate">
           <span>Giriş duyarlılığı: <span id="gateValue"></span></span>
@@ -83,14 +102,19 @@
         </div>
       </div>
       <footer>
-        <span id="meName"></span>
-        <button class="logout">Çıkış</button>
+        <span id="meAvatar"></span>
+        <div class="meInfo">
+          <span id="meName"></span>
+          <small>Çevrimiçi</small>
+        </div>
+        <button class="logout iconbtn" title="Çıkış yap" aria-label="Çıkış yap"><svg class="ico"><use href="#i-logout"/></svg></button>
       </footer>
     </aside>
 
     <main>
       <header>
-        <button id="menuBtn" aria-label="Kanalları aç">☰</button>
+        <button id="menuBtn" class="iconbtn" aria-label="Kanalları aç"><svg class="ico"><use href="#i-menu"/></svg></button>
+        <svg class="ico"><use href="#i-hash"/></svg>
         <h2 id="channelTitle"></h2>
       </header>
       <div id="stage" hidden></div>
@@ -100,12 +124,12 @@
       </div>
       <form id="composer">
         <textarea id="input" rows="1" maxlength="2000" placeholder="Mesaj yaz…" aria-label="Mesaj"></textarea>
-        <button type="submit" class="primary">Gönder</button>
+        <button type="submit" class="iconbtn" title="Gönder" aria-label="Gönder"><svg class="ico"><use href="#i-send"/></svg></button>
       </form>
     </main>
 
     <aside id="members">
-      <div class="group"><span>Çevrimiçi</span></div>
+      <div class="group"><span>Çevrimiçi — <span id="memberCount">0</span></span></div>
       <ul id="memberList"></ul>
     </aside>
   </div>
